@@ -1,1 +1,1 @@
-# axum-ollama-agentic-rag-proxy
+# Axum Ollama Agentic RAG Proxy Server
