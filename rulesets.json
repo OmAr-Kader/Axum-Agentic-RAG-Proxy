@@ -1,0 +1,6 @@
+{
+  "GLOBAL_ALWAYS_ON": "global/",
+  "SWIFT_IOS_RULES": "swift_ios/",
+  "KOTLIN_ANDROID_RULES": "kotlin_android/",
+  "RUST_AXUM_RULES": "rust_axum/"
+}
