@@ -37,7 +37,7 @@ pub struct GenerateRequest {
 }
 
 // --- Ollama Embed ---
-
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbedRequest {
     pub model: String,
@@ -55,7 +55,7 @@ pub enum EmbedInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbedResponse {
-    pub model: String,
+    //pub model: String,
     pub embeddings: Vec<Vec<f32>>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,

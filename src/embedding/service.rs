@@ -93,7 +93,9 @@ impl EmbeddingService {
     /// Embed a single query string
     #[tracing::instrument(skip(self, text))]
     pub async fn embed_query(&self, text: &str) -> Result<Vec<f32>, AppError> {
+        tracing::info!(text = %text, "Embedding query");
         let _permit = self.semaphore.acquire().await.expect("Semaphore closed");
+        tracing::info!(text = %text, "Acquired semaphore for embedding query");
         let embeddings = self.client.embed(vec![text.to_string()]).await?;
         embeddings
             .into_iter()

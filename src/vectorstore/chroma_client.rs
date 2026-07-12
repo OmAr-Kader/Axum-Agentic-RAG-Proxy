@@ -1,5 +1,7 @@
-use std::time::Duration;
+use std::collections::HashMap;
 
+use chroma::client::{ChromaAuthMethod, ChromaHttpClient, ChromaHttpClientOptions};
+use chroma::types::{IncludeList, Metadata, MetadataValue, QueryResponse, UpdateMetadata};
 use crate::config::Config;
 use crate::error::AppError;
 use crate::models::schemas::{
@@ -8,21 +10,30 @@ use crate::models::schemas::{
 
 /// ChromaDB HTTP client
 pub struct ChromaClient {
-    client: reqwest::Client,
-    base_url: String,
+    client: ChromaHttpClient,
     collection_prefix: String,
-    timeout: Option<Duration>,
 }
 
 impl ChromaClient {
-    pub fn new(config: &Config) -> Self {
-        let client = reqwest::Client::new();
-        Self {
-            client,
-            base_url: config.chroma_url.clone(),
+    pub fn new(config: &Config) -> Result<Self, AppError> {
+        let endpoint = config
+            .chroma_url
+            .parse()
+            .map_err(|error| AppError::Config(format!("invalid CHROMA_URL `{}`: {error}", config.chroma_url)))?;
+
+        let options = ChromaHttpClientOptions {
+            endpoint,
+            endpoints: Vec::new(),
+            auth_method: ChromaAuthMethod::None,
+            retry_options: Default::default(),
+            tenant_id: None,
+            database_name: None,
+        };
+
+        Ok(Self {
+            client: ChromaHttpClient::new(options),
             collection_prefix: config.chroma_collection_prefix.clone(),
-            timeout: config.chroma_request_timeout,
-        }
+        })
     }
 
     /// Get collection name for a category
@@ -32,17 +43,7 @@ impl ChromaClient {
 
     /// Check if Chroma is reachable
     pub async fn ping(&self) -> bool {
-        let url = format!("{}/api/v1/heartbeat", self.base_url);
-        let req = self.client.get(&url);
-        let req = if let Some(t) = self.timeout {
-            req.timeout(t)
-        } else {
-            req
-        };
-        req.send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        self.client.heartbeat().await.is_ok()
     }
 
     /// Get or create a collection
@@ -53,36 +54,21 @@ impl ChromaClient {
         embedding_model: &str,
     ) -> Result<ChromaCollection, AppError> {
         let name = self.collection_name(category);
-        let url = format!("{}/api/v1/collections", self.base_url);
-        let body = serde_json::json!({
-            "name": name,
-            "metadata": {"embedding_model": embedding_model},
-            "get_or_create": true
-        });
-        let req = self.client.post(&url).json(&body);
-        let req = if let Some(t) = self.timeout {
-            req.timeout(t)
-        } else {
-            req
-        };
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| AppError::Chroma(e.to_string()))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(AppError::Chroma(format!(
-                "Create collection failed ({}): {}",
-                status, text
-            )));
-        }
-        let col: ChromaCollection = resp
-            .json()
-            .await
-            .map_err(|e| AppError::Chroma(e.to_string()))?;
+        let mut metadata = Metadata::new();
+        metadata.insert("embedding_model".to_string(), MetadataValue::from(embedding_model.to_string()));
 
-        if let Some(meta) = &col.metadata {
+        let collection = self
+            .client
+            .get_or_create_collection(&name, None, Some(metadata))
+            .await
+            .map_err(|error| AppError::Chroma(error.to_string()))?;
+
+        let collection_model = collection.to_collection_model();
+        let mapped_metadata = collection_model
+            .metadata
+            .map(convert_metadata_to_json);
+
+        if let Some(meta) = &mapped_metadata {
             if let Some(model_val) = meta.get("embedding_model") {
                 if let Some(model_str) = model_val.as_str() {
                     if model_str != embedding_model {
@@ -95,7 +81,11 @@ impl ChromaClient {
             }
         }
 
-        Ok(col)
+        Ok(ChromaCollection {
+            id: collection.id().to_string(),
+            name: collection.name().to_string(),
+            metadata: mapped_metadata,
+        })
     }
 
     /// Upsert documents into a collection
@@ -105,28 +95,32 @@ impl ChromaClient {
         collection_id: &str,
         request: &ChromaAddRequest,
     ) -> Result<(), AppError> {
-        let url = format!(
-            "{}/api/v1/collections/{}/upsert",
-            self.base_url, collection_id
-        );
-        let req = self.client.post(&url).json(request);
-        let req = if let Some(t) = self.timeout {
-            req.timeout(t)
-        } else {
-            req
-        };
-        let resp = req
-            .send()
+        let collection = self
+            .client
+            .get_collection_by_id(collection_id)
             .await
-            .map_err(|e| AppError::Chroma(e.to_string()))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(AppError::Chroma(format!(
-                "Upsert failed ({}): {}",
-                status, text
-            )));
-        }
+            .map_err(|error| AppError::Chroma(error.to_string()))?;
+
+        let documents = request.documents.as_ref().map(|docs| {
+            docs.iter().cloned().map(Some).collect::<Vec<Option<String>>>()
+        });
+
+        let metadatas = request
+            .metadatas
+            .as_ref()
+            .map(|items| items.iter().map(convert_update_metadata).collect::<Vec<Option<UpdateMetadata>>>());
+
+        collection
+            .upsert(
+                request.ids.clone(),
+                Some(request.embeddings.clone()),
+                documents,
+                None,
+                metadatas,
+            )
+            .await
+            .map_err(|error| AppError::Chroma(error.to_string()))?;
+
         Ok(())
     }
 
@@ -137,84 +131,201 @@ impl ChromaClient {
         collection_id: &str,
         request: &ChromaQueryRequest,
     ) -> Result<ChromaQueryResponse, AppError> {
-        let url = format!(
-            "{}/api/v1/collections/{}/query",
-            self.base_url, collection_id
-        );
-        let req = self.client.post(&url).json(request);
-        let req = if let Some(t) = self.timeout {
-            req.timeout(t)
-        } else {
-            req
+        let collection = self
+            .client
+            .get_collection_by_id(collection_id)
+            .await
+            .map_err(|error| AppError::Chroma(error.to_string()))?;
+
+        let include = match &request.include {
+            Some(include) => Some(
+                IncludeList::try_from(include.clone())
+                    .map_err(|error| AppError::Validation(format!("invalid Chroma include list: {error}")))?,
+            ),
+            None => Some(IncludeList::default_query()),
         };
-        let resp = req
-            .send()
+
+        let response: QueryResponse = collection
+            .query(
+                request.query_embeddings.clone(),
+                Some(request.n_results as u32),
+                None,
+                None,
+                include,
+            )
             .await
-            .map_err(|e| AppError::Chroma(e.to_string()))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(AppError::Chroma(format!(
-                "Query failed ({}): {}",
-                status, text
-            )));
-        }
-        resp.json()
-            .await
-            .map_err(|e| AppError::Chroma(e.to_string()))
+            .map_err(|error| AppError::Chroma(error.to_string()))?;
+
+        Ok(convert_query_response(response))
     }
 
     /// Delete documents by IDs from a collection
     #[tracing::instrument(skip(self, ids), fields(collection = %collection_id, count = ids.len()))]
     pub async fn delete_by_ids(&self, collection_id: &str, ids: &[String]) -> Result<(), AppError> {
-        let url = format!(
-            "{}/api/v1/collections/{}/delete",
-            self.base_url, collection_id
-        );
-        let body = serde_json::json!({ "ids": ids });
-        let req = self.client.post(&url).json(&body);
-        let req = if let Some(t) = self.timeout {
-            req.timeout(t)
-        } else {
-            req
-        };
-        let resp = req
-            .send()
+        let collection = self
+            .client
+            .get_collection_by_id(collection_id)
             .await
-            .map_err(|e| AppError::Chroma(e.to_string()))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(AppError::Chroma(format!(
-                "Delete failed ({}): {}",
-                status, text
-            )));
-        }
+            .map_err(|error| AppError::Chroma(error.to_string()))?;
+
+        collection
+            .delete(Some(ids.to_vec()), None, None)
+            .await
+            .map_err(|error| AppError::Chroma(error.to_string()))?;
+
         Ok(())
     }
 
     /// Delete an entire collection
     #[tracing::instrument(skip(self))]
     pub async fn delete_collection(&self, collection_name: &str) -> Result<(), AppError> {
-        let url = format!("{}/api/v1/collections/{}", self.base_url, collection_name);
-        let req = self.client.delete(&url);
-        let req = if let Some(t) = self.timeout {
-            req.timeout(t)
-        } else {
-            req
-        };
-        let resp = req
-            .send()
+        let result = self
+            .client
+            .delete_collection(collection_name)
             .await
-            .map_err(|e| AppError::Chroma(e.to_string()))?;
-        if !resp.status().is_success() && resp.status().as_u16() != 404 {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(AppError::Chroma(format!(
-                "Delete collection failed ({}): {}",
-                status, text
-            )));
+            .map_err(|error| AppError::Chroma(error.to_string()));
+
+        if let Err(error) = result {
+            let message = error.to_string().to_lowercase();
+            if message.contains("404") || message.contains("not found") {
+                return Ok(());
+            }
+            return Err(error);
         }
+
         Ok(())
+    }
+}
+
+fn convert_update_metadata(
+    metadata: &HashMap<String, serde_json::Value>,
+) -> Option<UpdateMetadata> {
+    let mut out = UpdateMetadata::new();
+    for (key, value) in metadata {
+        let converted = match value {
+            serde_json::Value::Bool(v) => MetadataValue::from(*v),
+            serde_json::Value::Number(v) if v.is_i64() => MetadataValue::from(v.as_i64().unwrap_or_default()),
+            serde_json::Value::Number(v) => MetadataValue::from(v.as_f64().unwrap_or_default()),
+            serde_json::Value::String(v) => MetadataValue::from(v.clone()),
+            serde_json::Value::Array(values) => {
+                if values.iter().all(|item| item.is_string()) {
+                    let strings = values
+                        .iter()
+                        .filter_map(|item| item.as_str().map(ToString::to_string))
+                        .collect::<Vec<_>>();
+                    MetadataValue::from(strings)
+                } else if values.iter().all(|item| item.is_boolean()) {
+                    let bools = values
+                        .iter()
+                        .filter_map(serde_json::Value::as_bool)
+                        .collect::<Vec<_>>();
+                    MetadataValue::from(bools)
+                } else if values.iter().all(|item| item.is_i64()) {
+                    let ints = values
+                        .iter()
+                        .filter_map(serde_json::Value::as_i64)
+                        .collect::<Vec<_>>();
+                    MetadataValue::from(ints)
+                } else if values.iter().all(|item| item.is_number()) {
+                    let floats = values
+                        .iter()
+                        .filter_map(serde_json::Value::as_f64)
+                        .collect::<Vec<_>>();
+                    MetadataValue::from(floats)
+                } else {
+                    continue;
+                }
+            }
+            _ => continue,
+        };
+        out.insert(key.clone(), converted.into());
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn convert_metadata_to_json(metadata: Metadata) -> HashMap<String, serde_json::Value> {
+    metadata
+        .into_iter()
+        .map(|(key, value)| (key, metadata_value_to_json(value)))
+        .collect()
+}
+
+fn metadata_value_to_json(value: MetadataValue) -> serde_json::Value {
+    match value {
+        MetadataValue::Bool(v) => serde_json::Value::Bool(v),
+        MetadataValue::Int(v) => serde_json::json!(v),
+        MetadataValue::Float(v) => serde_json::json!(v),
+        MetadataValue::Str(v) => serde_json::Value::String(v),
+        MetadataValue::BoolArray(v) => serde_json::json!(v),
+        MetadataValue::IntArray(v) => serde_json::json!(v),
+        MetadataValue::FloatArray(v) => serde_json::json!(v),
+        MetadataValue::StringArray(v) => serde_json::json!(v),
+        MetadataValue::SparseVector(v) => serde_json::json!({
+            "indices": v.indices,
+            "values": v.values,
+        }),
+    }
+}
+
+fn convert_query_response(response: QueryResponse) -> ChromaQueryResponse {
+    let embeddings = response.embeddings.map(|outer| {
+        outer
+            .into_iter()
+            .map(|inner| {
+                inner
+                    .into_iter()
+                    .map(|item| item.unwrap_or_default())
+                    .collect::<Vec<Vec<f32>>>()
+            })
+            .collect::<Vec<Vec<Vec<f32>>>>()
+    });
+
+    let documents = response.documents.map(|outer| {
+        outer
+            .into_iter()
+            .map(|inner| {
+                inner
+                    .into_iter()
+                    .map(|item| item.unwrap_or_default())
+                    .collect::<Vec<String>>()
+            })
+            .collect::<Vec<Vec<String>>>()
+    });
+
+    let metadatas = response.metadatas.map(|outer| {
+        outer
+            .into_iter()
+            .map(|inner| {
+                inner
+                    .into_iter()
+                    .map(|item| item.map(convert_metadata_to_json).unwrap_or_default())
+                    .collect::<Vec<HashMap<String, serde_json::Value>>>()
+            })
+            .collect::<Vec<Vec<HashMap<String, serde_json::Value>>>>()
+    });
+
+    let distances = response.distances.map(|outer| {
+        outer
+            .into_iter()
+            .map(|inner| {
+                inner
+                    .into_iter()
+                    .map(|item| item.unwrap_or_default())
+                    .collect::<Vec<f32>>()
+            })
+            .collect::<Vec<Vec<f32>>>()
+    });
+
+    ChromaQueryResponse {
+        ids: response.ids,
+        embeddings,
+        documents,
+        metadatas,
+        distances,
     }
 }

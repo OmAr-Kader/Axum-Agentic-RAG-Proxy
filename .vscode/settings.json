@@ -1,0 +1,20 @@
+{
+    "workbench.colorCustomizations": {
+        // Main title bar
+        "titleBar.activeBackground": "#020102",
+        "titleBar.activeForeground": "#ffffff",
+        // Command Center (center search/input)
+        "commandCenter.background": "#020102",
+        "commandCenter.foreground": "#FFFFFF",
+        "commandCenter.activeBackground": "#1F2937",
+        "commandCenter.activeForeground": "#FFFFFF",
+        "commandCenter.border": "#ffffff"
+    },
+    "chat.tools.terminal.autoApprove": {
+        "./cargo": true,
+        "cargo": true,
+        "rm": false,
+        "/^rm\\b/i": false
+    },
+    "ollama.endpoint": "http://localhost:11434"
+}

@@ -62,7 +62,7 @@ async fn main() -> Result<(), AppError> {
         base_url: config.ollama_base_url.clone(),
     });
     let index_manager = Arc::new(IndexManager::new(config.clone()));
-    let chroma = Arc::new(ChromaClient::new(&config));
+    let chroma = Arc::new(ChromaClient::new(&config)?);
     let embedding_service = Arc::new(EmbeddingService::new(embed_client, config.clone()));
     let hybrid_engine = Arc::new(HybridEngine::new(
         config.clone(),
