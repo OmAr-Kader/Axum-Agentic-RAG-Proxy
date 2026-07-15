@@ -17,6 +17,6 @@ pub async fn process_reindex_queue(state: Arc<AppState>, mut rx: mpsc::Receiver<
             }
         }
         while rx.try_recv().is_ok() {}
-        crate::jobs::initial_index::run_initial_index(state.clone()).await;
+        crate::jobs::initial_index::run_initial_index(state.clone(), true).await;
     }
 }

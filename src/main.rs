@@ -80,7 +80,9 @@ async fn main() -> Result<(), AppError> {
         chroma,
     });
 
-    tokio::spawn(jobs::initial_index::run_initial_index(state.clone()));
+    // Only run initial indexing on startup if reload_on_startup is true
+    tokio::spawn(jobs::initial_index::run_initial_index(state.clone(), config.reload_on_startup));
+
     tokio::spawn(jobs::retry_failed_embeddings::retry_failed_embeddings_loop(state.clone()));
 
     if config.watch_rulesets {

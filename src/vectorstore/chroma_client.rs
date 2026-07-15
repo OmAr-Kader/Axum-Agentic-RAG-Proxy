@@ -9,8 +9,11 @@ use crate::models::schemas::{
 };
 
 /// ChromaDB HTTP client
+#[allow(dead_code)]
 pub struct ChromaClient {
     client: ChromaHttpClient,
+    http_client: reqwest::Client,
+    chroma_url: String,
     collection_prefix: String,
 }
 
@@ -32,6 +35,8 @@ impl ChromaClient {
 
         Ok(Self {
             client: ChromaHttpClient::new(options),
+            http_client: reqwest::Client::new(),
+            chroma_url: config.chroma_url.clone(),
             collection_prefix: config.chroma_collection_prefix.clone(),
         })
     }
@@ -176,21 +181,73 @@ impl ChromaClient {
         Ok(())
     }
 
-    /// Delete an entire collection
+    // temp query all collections ids
+    pub async fn list_collections(&self) {
+        let list = self
+            .client
+            .list_collections(800, Some(0))
+            .await
+            .map_err(|error| AppError::Chroma(error.to_string()))
+            .map(|collections| {
+                for collection in collections {
+                    tracing::info!(collection_id = %collection.id(), collection_name = %collection.name(), "Found collection");
+                }        
+            });
+            match list {
+                Ok(_) => tracing::info!("Listed all collections successfully"),
+                Err(error) => tracing::error!(error = %error, "Failed to list collections"),
+            }
+    }
+
+    /// Delete an entire collection with verification
     #[tracing::instrument(skip(self))]
     pub async fn delete_collection(&self, collection_name: &str) -> Result<(), AppError> {
+        tracing::info!(collection_name = %collection_name, "Attempting to delete ChromaDB collection");
+        
+
         let result = self
             .client
             .delete_collection(collection_name)
             .await
             .map_err(|error| AppError::Chroma(error.to_string()));
 
-        if let Err(error) = result {
-            let message = error.to_string().to_lowercase();
-            if message.contains("404") || message.contains("not found") {
-                return Ok(());
+        match result {
+            Ok(_) => {
+                tracing::info!(collection_name = %collection_name, "Delete API call succeeded");
             }
-            return Err(error);
+            Err(error) => {
+                let message = error.to_string().to_lowercase();
+                tracing::warn!(collection_name = %collection_name, error = %error, "Delete API call failed, checking if collection exists");
+                if message.contains("404") || message.contains("not found") {
+                    tracing::info!(collection_name = %collection_name, "Collection not found (404), treating as success");
+                    return Ok(());
+                }
+                tracing::error!(collection_name = %collection_name, error = %error, "Delete API call failed");
+                return Err(error);
+            }
+        }
+
+        // Verify deletion by trying to get the collection
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        match self.client.get_collection(collection_name).await {
+            Ok(collection) => {
+                // Collection still exists, try to clear all documents instead
+                tracing::warn!(collection_name = %collection_name, collection_id = %collection.id(), "Collection still exists after delete, clearing all documents");
+                if let Err(clear_err) = collection.delete(None, None, None).await {
+                    tracing::error!(collection_name = %collection_name, error = %clear_err, "Failed to clear collection documents");
+                    return Err(AppError::Chroma(format!("Failed to delete collection {}: could not clear documents after delete failed", collection_name)));
+                }
+                tracing::info!(collection_name = %collection_name, "Successfully cleared all documents from collection");
+            }
+            Err(err) => {
+                // Collection does not exist, which is what we want
+                let msg = err.to_string().to_lowercase();
+                if msg.contains("404") || msg.contains("not found") {
+                    tracing::info!(collection_name = %collection_name, "Verified: collection successfully deleted");
+                    return Ok(());
+                }
+                tracing::warn!(collection_name = %collection_name, error = %err, "Could not verify collection deletion (unexpected error)");
+            }
         }
 
         Ok(())

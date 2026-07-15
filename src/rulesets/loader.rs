@@ -84,7 +84,14 @@ pub fn load_all_rulesets(
 
         chunks_by_category.insert(category.clone(), chunks);
     }
-
+    tracing::info!(
+        categories = chunks_by_category.len(),
+        empty_categories = empty_categories.len(),
+        "Loaded ruleset chunks by category"
+    );
+    for (category, chunks) in &chunks_by_category {
+        tracing::info!(category = %category, chunks = chunks.len(), "Category chunk count");
+    }
     Ok((chunks_by_category, empty_categories))
 }
 

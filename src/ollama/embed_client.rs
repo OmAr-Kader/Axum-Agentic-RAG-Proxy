@@ -22,7 +22,7 @@ impl EmbedClient {
     #[tracing::instrument(skip(self, texts), fields(batch_size = texts.len()))]
     pub async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, AppError> {
         let url = format!("{}/api/embed", self.base_url.trim_end_matches('/'));
-        tracing::info!(url = %url, model = %self.model, inputs = texts.len(), "Preparing embed request");
+
         let payload = EmbedRequestBody {
             model: self.model.clone(),
             input: texts,
@@ -40,22 +40,48 @@ impl EmbedClient {
         if let Some(timeout) = self.timeout {
             request = request.timeout(timeout);
         }
+        tracing::info!(?self.timeout, "Embed timeout");
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    debug = ?err,
+                    timeout = err.is_timeout(),
+                    connect = err.is_connect(),
+                    status = ?err.status(),
+                    url = ?err.url(),
+                    "Failed to send embed request"
+                );
 
-        let response = request.send().await?;
+                return Err(err.into());
+            }
+        };
 
         let status = response.status();
-        let body = response.text().await?;
+
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    debug = ?err,
+                    "Failed to read response body"
+                );
+
+                return Err(err.into());
+            }
+        };
 
         tracing::info!(
             status = %status,
-            body = %body,
             "Received embed response"
         );
+
         if !status.is_success() {
             return Err(AppError::Embedding(format!(
                 "Ollama returned HTTP {}: {}",
-                status,
-                body
+                status, body
             )));
         }
 

@@ -8,13 +8,12 @@ use crate::models::schemas::{ChromaAddRequest, RuleChunk};
 use crate::rulesets::loader::{load_all_rulesets, load_category_map};
 use crate::AppState;
 
-pub async fn run_initial_index(state: Arc<AppState>) {
+pub async fn run_initial_index(state: Arc<AppState>, should_reload: bool) {
     state
         .index_manager
         .ingestion_ready
         .store(false, std::sync::atomic::Ordering::Relaxed);
-
-    if let Err(error) = run(state.clone()).await {
+    if let Err(error) = run(state.clone(), should_reload).await {
         error!(error = %error, "Initial indexing failed");
         state
             .index_manager
@@ -22,13 +21,12 @@ pub async fn run_initial_index(state: Arc<AppState>) {
             .await;
         return;
     }
-
     state.index_manager.set_last_error(None).await;
     state.index_manager.set_ready();
     info!("Initial indexing completed");
 }
 
-async fn run(state: Arc<AppState>) -> Result<(), AppError> {
+async fn run(state: Arc<AppState>, should_reload: bool) -> Result<(), AppError> {
     let category_map = load_category_map(&state.config.ruleset_map_file)?;
     let (chunks_by_category, empty_categories) = load_all_rulesets(
         &category_map,
@@ -67,58 +65,70 @@ async fn run(state: Arc<AppState>) -> Result<(), AppError> {
         let mut empty = state.index_manager.empty_categories.write().await;
         *empty = empty_categories;
     }
-
-    for category in category_map.keys() {
-        let collection_name = state.chroma.collection_name(category);
-        if let Err(error) = state.chroma.delete_collection(&collection_name).await {
-            warn!(category = %category, error = %error, "Failed to reset collection before reindex");
+    if should_reload {
+        // Delete all existing collections before reindexing (fail fast to prevent duplicates)
+        tracing::info!("Starting collection cleanup phase - deleting {} categories", category_map.len());
+        for category in category_map.keys() {
+            let collection_name = state.chroma.collection_name(category);
+            tracing::info!(category = %category, collection_name = %collection_name, "Deleting ChromaDB collection");
+            state.chroma.list_collections().await; // Ensure we have the latest list of collections
+            match state.chroma.delete_collection(&collection_name).await {
+                Ok(_) => {
+                    tracing::info!(category = %category, collection_name = %collection_name, "Successfully deleted ChromaDB collection");
+                }
+                Err(error) => {
+                    // Fail fast: if we can't delete, don't proceed (prevents duplicates being appended)
+                    error!(category = %category, collection_name = %collection_name, error = %error, "Failed to delete collection before reindex - aborting");
+                    return Err(AppError::Chroma(format!("Failed to delete collection {}: {}", collection_name, error)));
+                }
+            }
         }
-    }
+        tracing::info!("Collection cleanup phase completed successfully");
 
-    for (category, chunks) in &chunks_by_category {
-        if chunks.is_empty() {
-            continue;
-        }
-
-        let collection = state
-            .chroma
-            .get_or_create_collection(category, &state.config.embedding_model)
-            .await?;
-        let embeddings = state.hybrid_engine.embedding_service().embed_chunks(chunks).await;
-        if embeddings.is_empty() {
-            warn!(category = %category, "No embeddings generated for category");
-            continue;
-        }
-
-        let embedding_map: HashMap<String, Vec<f32>> = embeddings.into_iter().collect();
-        let mut ids = Vec::new();
-        let mut vectors = Vec::new();
-        let mut documents = Vec::new();
-        let mut metadatas = Vec::new();
-
-        for chunk in chunks {
-            let Some(embedding) = embedding_map.get(&chunk.id) else {
+        for (category, chunks) in &chunks_by_category {
+            if chunks.is_empty() {
                 continue;
+            }
+
+            let collection = state
+                .chroma
+                .get_or_create_collection(category, &state.config.embedding_model)
+                .await?;
+            let embeddings = state.hybrid_engine.embedding_service().embed_chunks(chunks).await;
+            if embeddings.is_empty() {
+                warn!(category = %category, "No embeddings generated for category");
+                continue;
+            }
+
+            let embedding_map: HashMap<String, Vec<f32>> = embeddings.into_iter().collect();
+            let mut ids = Vec::new();
+            let mut vectors = Vec::new();
+            let mut documents = Vec::new();
+            let mut metadatas = Vec::new();
+
+            for chunk in chunks {
+                let Some(embedding) = embedding_map.get(&chunk.id) else {
+                    continue;
+                };
+                ids.push(chunk.id.clone());
+                vectors.push(embedding.clone());
+                documents.push(chunk.content.clone());
+                metadatas.push(chunk_metadata(chunk));
+            }
+
+            if ids.is_empty() {
+                continue;
+            }
+
+            let request = ChromaAddRequest {
+                ids,
+                embeddings: vectors,
+                documents: Some(documents),
+                metadatas: Some(metadatas),
             };
-            ids.push(chunk.id.clone());
-            vectors.push(embedding.clone());
-            documents.push(chunk.content.clone());
-            metadatas.push(chunk_metadata(chunk));
+            state.chroma.upsert(&collection.id, &request).await?;
         }
-
-        if ids.is_empty() {
-            continue;
-        }
-
-        let request = ChromaAddRequest {
-            ids,
-            embeddings: vectors,
-            documents: Some(documents),
-            metadatas: Some(metadatas),
-        };
-        state.chroma.upsert(&collection.id, &request).await?;
     }
-
     Ok(())
 }
 

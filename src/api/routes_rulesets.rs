@@ -48,7 +48,7 @@ pub async fn write_ruleset(
         .map_err(|error| AppError::Internal(format!("Failed to write file: {error}")))?;
 
     info!(category = %category, filename = %filename, "Ruleset file written");
-    tokio::spawn(crate::jobs::initial_index::run_initial_index(state.clone()));
+    tokio::spawn(crate::jobs::initial_index::run_initial_index(state.clone(), true));
 
     Ok((
         StatusCode::CREATED,
@@ -93,7 +93,7 @@ pub async fn delete_ruleset_file(
             std::fs::remove_file(&file_path)
                 .map_err(|error| AppError::Internal(format!("Failed to delete file: {error}")))?;
         }
-        tokio::spawn(crate::jobs::initial_index::run_initial_index(state.clone()));
+        tokio::spawn(crate::jobs::initial_index::run_initial_index(state.clone(), true));
     }
 
     info!(category = %category, filename = %filename, chunks_removed = chunk_ids.len(), "Removed ruleset file");
@@ -125,7 +125,7 @@ pub async fn delete_category(
             std::fs::remove_dir_all(&category_path)
                 .map_err(|error| AppError::Internal(format!("Failed to delete category: {error}")))?;
         }
-        tokio::spawn(crate::jobs::initial_index::run_initial_index(state.clone()));
+        tokio::spawn(crate::jobs::initial_index::run_initial_index(state.clone(), true));
     }
 
     info!(category = %category, "Category collection deleted");

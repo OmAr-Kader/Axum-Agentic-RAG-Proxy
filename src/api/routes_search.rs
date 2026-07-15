@@ -20,7 +20,7 @@ pub async fn search_handler(
     let results: Vec<SearchResultItem> = state
         .hybrid_engine
         .retrieve(&messages)
-        .await
+        .await?
         .into_iter()
         .filter(|chunk| {
             body.category

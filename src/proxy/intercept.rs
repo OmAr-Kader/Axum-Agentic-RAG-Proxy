@@ -21,7 +21,8 @@ pub async fn intercept_chat(
         }
     };
 
-    let chunks = state.hybrid_engine.retrieve(&chat_req.messages).await;
+    let chunks = state.hybrid_engine.retrieve(&chat_req.messages).await?;
+    tracing::info!(retrieved_chunks = chunks.len(), "Retrieved chunks for chat request");
     if !chunks.is_empty() {
         let original_system = chat_req
             .messages
@@ -82,8 +83,8 @@ pub async fn intercept_generate(
         content: generate_req.prompt.clone().unwrap_or_default(),
         extra: std::collections::HashMap::new(),
     }];
-    let chunks = state.hybrid_engine.retrieve(&messages).await;
-
+    let chunks = state.hybrid_engine.retrieve(&messages).await?;
+    tracing::info!(retrieved_chunks = chunks.len(), "Retrieved chunks for generate request");
     if !chunks.is_empty() {
         generate_req.system = Some(build_system_prompt(
             &chunks,

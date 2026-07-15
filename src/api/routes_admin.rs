@@ -28,7 +28,7 @@ pub async fn reload_handler(
 
     let state_clone = state.clone();
     tokio::spawn(async move {
-        crate::jobs::initial_index::run_initial_index(state_clone).await;
+        crate::jobs::initial_index::run_initial_index(state_clone, true).await;
     });
 
     Ok(Json(serde_json::json!({"status": "reload_started"})))
@@ -51,6 +51,7 @@ pub async fn reset_handler(
         .ingestion_ready
         .store(false, std::sync::atomic::Ordering::Relaxed);
 
+    // Clear in-memory state
     {
         let mut chunk_map = state.index_manager.chunk_map.write().await;
         chunk_map.clear();
@@ -60,9 +61,26 @@ pub async fn reset_handler(
         hashes.clear();
     }
 
+    // Delete all ChromaDB collections
+    use crate::rulesets::loader::load_category_map;
+    match load_category_map(&state.config.ruleset_map_file) {
+        Ok(category_map) => {
+            for category in category_map.keys() {
+                let collection_name = state.chroma.collection_name(category);
+                match state.chroma.delete_collection(&collection_name).await {
+                    Ok(_) => info!(category = %category, "Deleted ChromaDB collection"),
+                    Err(error) => info!(category = %category, error = %error, "Could not delete ChromaDB collection (may not exist)"),
+                }
+            }
+        }
+        Err(error) => {
+            info!(error = %error, "Could not load category map to delete ChromaDB collections");
+        }
+    }
+
     let state_clone = state.clone();
     tokio::spawn(async move {
-        crate::jobs::initial_index::run_initial_index(state_clone).await;
+        crate::jobs::initial_index::run_initial_index(state_clone, true).await;
     });
 
     Ok(Json(serde_json::json!({"status": "reset_started"})))

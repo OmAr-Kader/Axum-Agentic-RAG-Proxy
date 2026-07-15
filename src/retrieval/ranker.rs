@@ -115,5 +115,10 @@ pub fn rank_chunks(chunks: Vec<(RuleChunk, f32)>, analysis: &QueryAnalysis) -> V
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| right.chunk.frontmatter.priority.cmp(&left.chunk.frontmatter.priority))
     });
+    tracing::info!(
+        "Ranked {} chunks for query analysis: {:?}",
+        ranked.len(),
+        analysis
+    );
     ranked
 }
