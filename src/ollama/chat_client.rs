@@ -44,7 +44,7 @@ impl ChatClient {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-
+        tracing::info!(path = path, "Forwarding request to Ollama API");
         Ok(request.send().await?)
     }
 }

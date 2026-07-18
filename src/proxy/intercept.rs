@@ -24,6 +24,14 @@ pub async fn intercept_chat(
     let chunks = state.hybrid_engine.retrieve(&chat_req.messages).await?;
     tracing::info!(retrieved_chunks = chunks.len(), "Retrieved chunks for chat request");
     if !chunks.is_empty() {
+        for chunk in chunks.clone() {
+            tracing::info!(
+                "Retrieved chunk {} with title '{}' and category '{}'",
+                chunk.chunk.id,
+                chunk.chunk.content,
+                chunk.chunk.category
+            );
+        }
         let original_system = chat_req
             .messages
             .iter()

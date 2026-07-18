@@ -83,6 +83,10 @@ pub fn rank_chunks(chunks: Vec<(RuleChunk, f32)>, analysis: &QueryAnalysis) -> V
     let mut best_by_id: HashMap<String, (RuleChunk, f32)> = HashMap::new();
 
     for (chunk, similarity_score) in chunks {
+        tracing::debug!(
+            "Evaluating chunk {} with similarity score {}",
+            chunk.id, similarity_score
+        );
         best_by_id
             .entry(chunk.id.clone())
             .and_modify(|existing| {

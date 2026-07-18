@@ -250,6 +250,7 @@ impl HybridEngine {
             }
         }
 
+        tracing::info!(chosen = chosen.len(), "Total chunks selected after applying budget");
         chosen
     }
 
@@ -270,9 +271,10 @@ impl HybridEngine {
         tracing::info!(?identifiers, "Identifiers extracted from messages");
 
         if identifiers.is_empty() {
-            return Err(AppError::Validation(
+            tracing::warn!("No identifiers found in messages; expected format: #proxy_ollama:file_id1,file_id2 or #proxy_ollama:CATEGORY_NAME");
+            /*return Err(AppError::Validation(
                 "No identifiers found; expected format: #proxy_ollama:file_id1,file_id2 or #proxy_ollama:CATEGORY_NAME".into(),
-            ));
+            ));*/
         }
 
         // Parse identifiers and determine if they're categories or file IDs
