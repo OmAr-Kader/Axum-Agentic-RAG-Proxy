@@ -5,6 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
 [![LLM Backends](https://img.shields.io/badge/LLM_Backends-Ollama%20%7C%20LM%20Studio%20%7C%20oMLX-brightgreen?style=flat-square)](https://lmstudio.ai/)
 [![Vector DB](https://img.shields.io/badge/Vector_DB-ChromaDB-red?style=flat-square&logo=docker)](https://www.trychroma.com)
+[![API Collection](https://img.shields.io/badge/API_Collection-Postman%2FBruno-FF6C37?style=flat-square&logo=postman)](Agentic-RAG-Proxy.collection.json)
 
 A transparent reverse proxy for Ollama, written in Rust with Axum. It sits in front of `http://localhost:11434`, intercepts `/api/chat` and `/api/generate`, injects retrieved rule chunks into the system prompt, and forwards everything else — including every other Ollama endpoint — unmodified.
 
@@ -22,6 +23,7 @@ A transparent reverse proxy for Ollama, written in Rust with Axum. It sits in fr
 * **Admin API** for ruleset management: list ruleset chunk counts, write/delete individual `.md` rule files, delete a whole category (with `?confirm=true`), trigger a full reindex, and reset all in-memory + ChromaDB state.
 * **`/search` endpoint**: runs the same retrieval path as chat interception against an arbitrary query string, with optional category filter and `top_k` override.
 * **Health endpoint** reporting Ollama reachability, ChromaDB reachability, ingestion readiness, and active rule categories.
+* **Ready-to-use API Collection**: includes `Agentic-RAG-Proxy.collection.json` for fast endpoint testing via Postman, Bruno, or Insomnia.
 * **Filename/category/content-size validation** on all ruleset write/delete admin routes.
 * **Structured logging** via `tracing` with file rotation (`tracing-appender`) and configurable retention/level.
 * **Independent Ollama backends**: chat/generate traffic and embedding traffic can point at different Ollama instances/models via separate base URLs.
@@ -185,6 +187,12 @@ The server listens on `HOST:PORT` (default `0.0.0.0:8000`) and exposes:
 | `GET` | `/admin/index-status` | Ingestion readiness, last error, empty categories |
 | `POST` | `/search` | Run retrieval against an arbitrary `{"query": "...", "category": "...", "top_k": N}` body |
 | `ANY` | `/api/*` (other paths) | Transparent passthrough to `OLLAMA_BASE_URL` |
+
+### API Collection
+
+An API collection file [Agentic-RAG-Proxy.collection.json](Agentic-RAG-Proxy.collection.json) is included in the root directory. You can import this file directly into [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Insomnia](https://insomnia.rest/) to immediately test all chat, generate, search, and admin endpoints.
+
+### Example Request
 
 To retrieve rules in a chat request, tag a user message with `#proxy_ollama:` followed by a comma-separated list of rule frontmatter `id`s and/or category names from `rulesets.json`:
 
