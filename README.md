@@ -2,7 +2,6 @@
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Axum](https://img.shields.io/badge/Framework-Axum-blue?style=flat-square&logo=rust)](https://github.com/tokio-rs/axum)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
 [![LLM Backends](https://img.shields.io/badge/LLM_Backends-Ollama%20%7C%20LM%20Studio%20%7C%20oMLX-brightgreen?style=flat-square)](https://lmstudio.ai/)
 [![Vector DB](https://img.shields.io/badge/Vector_DB-ChromaDB-red?style=flat-square&logo=docker)](https://www.trychroma.com)
 [![API Collection](https://img.shields.io/badge/API_Collection-Postman%2FBruno-FF6C37?style=flat-square&logo=postman)](Agentic-RAG-Proxy.collection.json)
@@ -209,6 +208,5 @@ curl http://localhost:8000/api/chat \
 
 Point any Ollama-compatible client (e.g. an IDE's chat integration) at `http://localhost:8000` instead of `http://localhost:11434` to use the proxy transparently for all other Ollama traffic.
 
-## License
-
-Apache License 2.0. See `LICENSE`.
+## 📝 License
+Distributed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) file for details.
