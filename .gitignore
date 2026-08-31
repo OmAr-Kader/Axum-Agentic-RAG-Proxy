@@ -29,4 +29,7 @@ target
 logs/
 
 # Rulesets (user-maintained)
-/rulesets/
+# /rulesets/
+/rulesets/kotlin_android/
+/rulesets/swift_ios/
+/rulesets/rust_axum/
